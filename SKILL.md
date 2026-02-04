@@ -163,6 +163,15 @@ The skill uses Klutch's session token authentication:
 3. **Subsequent Requests**: Uses cached token until it expires
 4. **Auto-Refresh**: Creates a new session token when the cached one fails
 
+## Hypothetical Agent Use Cases
+
+The Klutch skill enables agents to handle their own budget or provide personal finance assistance.
+
+*   **Sub-Agent Budgeting**: Create a virtual card for a sub-agent to pay for its own usage (AWS, OpenAI) with a hard limit.
+*   **Budget Guardrails**: Monitor spending categories (e.g., 'FOOD') and alert the user if they exceed a monthly budget.
+*   **Transaction Alerts**: Watch for specific merchants or unusual activity and notify the user immediately.
+*   **Expense Summary**: Summarize monthly spending and categorize transactions for personal journaling.
+
 ## Error Handling
 
 The skill handles common error scenarios:
