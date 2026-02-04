@@ -1,14 +1,16 @@
-# OpenClaw Klutch Skill
+# Klutch Agentic Credit Card OpenClaw Skill
 
-💳 OpenClaw skill for Klutch programmable credit card API integration.
+💳 OpenClaw skill for Klutch programmable credit card API integration. Enables agentic virtual card creation, spending controls, and automated purchase workflows.
+
 
 ## Features
 
-- **Card Info**: View your Klutch card details and status
+- **Virtual Card Creation**: Create merchant-locked, single-use virtual cards with spending limits
+- **Card Management**: List, view, and terminate virtual cards
 - **Transaction History**: List recent transactions with merchant details
 - **Spending Categories**: View transaction categories and MCC codes
 - **Spending Analysis**: Group transactions by category
-- **Configuration Management**: Customize API endpoint and timeouts
+- **Configuration Management**: Customize API endpoint, timeouts, and safety guardrails
 
 ## Prerequisites
 
@@ -118,6 +120,14 @@ Output:
 # List all cards
 python scripts/klutch.py card list
 
+# Create a virtual card
+python scripts/klutch.py card create --name "GitHub Pro" --limit 50.00 --merchant "GitHub"
+python scripts/klutch.py card create --name "AWS Services" --limit 200.00 --category "cloud"
+python scripts/klutch.py card create --name "One-time Purchase" --limit 47.50 --single-use
+
+# Terminate a virtual card (permanent)
+python scripts/klutch.py card terminate crd_xxx --force
+
 # View transaction categories
 python scripts/klutch.py card categories
 
@@ -153,6 +163,24 @@ The skill automatically creates session tokens. If you encounter issues:
 ```bash
 rm ~/.config/klutch/token.json
 ```
+
+### Safety Guardrails
+
+The skill includes configurable safety limits for autonomous use:
+
+```json
+{
+  "autonomous": {
+    "enabled": false,
+    "max_per_card": 200,
+    "require_approval_above": 100
+  }
+}
+```
+
+- `enabled`: Allow autonomous card creation without prompts
+- `max_per_card`: Maximum spending limit for any single card
+- `require_approval_above`: Amount above which confirmation is required
 
 ## Security Notes
 

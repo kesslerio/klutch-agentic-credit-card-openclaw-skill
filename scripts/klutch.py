@@ -15,7 +15,7 @@ from typing import Any, Optional
 import click
 import requests
 
-from auth import get_token, clear_token
+from auth import get_token, clear_token, save_card_to_1password
 
 CONFIG_PATH = Path.home() / ".config" / "klutch" / "config.json"
 TOKEN_PATH = Path.home() / ".config" / "klutch" / "token.json"
@@ -230,6 +230,215 @@ def card_categories(ctx: Context) -> None:
         click.echo(json.dumps(data, indent=2))
     except ValueError as e:
         raise click.ClickException(str(e))
+
+
+@card.command("create")
+@click.option("--name", "-n", required=True, help="Display name for the virtual card")
+@click.option("--limit", "-l", type=click.FloatRange(min=0.01), required=True, help="Spending limit in dollars")
+@click.option("--merchant", "-m", help="Lock card to specific merchant name")
+@click.option("--category", "-c", help="Restrict to transaction category")
+@click.option("--single-use", is_flag=True, help="Auto-terminate after first transaction")
+@click.pass_obj
+def card_create(ctx: Context, name: str, limit: float, merchant: Optional[str], 
+                category: Optional[str], single_use: bool) -> None:
+    """Create a new virtual card with spending controls."""
+    cfg = _load_config()
+    endpoint = cfg["api"]["endpoint"]
+    
+    # Safety checks
+    max_per_card = cfg.get("autonomous", {}).get("max_per_card", 200)
+    require_approval = cfg.get("autonomous", {}).get("require_approval_above", 100)
+    
+    if limit > max_per_card:
+        raise click.ClickException(
+            f"Limit ${limit:.2f} exceeds maximum allowed (${max_per_card:.2f}). "
+            f"Adjust 'autonomous.max_per_card' in config to increase."
+        )
+    
+    # Check if approval required (not in yolo mode and autonomous not enabled)
+    autonomous_enabled = cfg.get("autonomous", {}).get("enabled", False)
+    if not ctx.yolo and limit > require_approval:
+        if not click.confirm(f"Create card '{name}' with ${limit:.2f} limit?"):
+            click.echo("Cancelled.")
+            return
+    
+    try:
+        token = get_token(endpoint)
+        
+        # Build GraphQL mutation - request sensitive fields for 1Password storage
+        query = """
+        mutation($input: VirtualCardInput!) {
+            createVirtualCard(input: $input) {
+                id
+                name
+                limit
+                status
+                cardNumber
+                expiryDate
+                cvv
+            }
+        }
+        """
+        
+        input_data = {
+            "name": name,
+            "limit": limit,
+        }
+        
+        if merchant:
+            input_data["merchantName"] = merchant
+        if category:
+            input_data["categoryId"] = category
+        if single_use:
+            input_data["singleUse"] = True
+        
+        variables = {"input": input_data}
+        
+        data = _api_request(query, endpoint, token, cfg, variables)
+        card_data = data.get("createVirtualCard", {})
+        
+        # Validate response has required fields
+        if not card_data.get("id"):
+            raise click.ClickException("Card creation failed: no card ID returned from API")
+        
+        # Save to 1Password
+        op_title = f"Klutch Virtual Card: {name}"
+        if merchant:
+            op_title += f" ({merchant})"
+            
+        click.echo(f"Saving card details to 1Password: '{op_title}'...")
+        if save_card_to_1password(op_title, card_data):
+            click.echo("✅ Saved to 1Password.")
+        else:
+            click.echo("⚠️  Failed to save to 1Password. Make sure 'op' CLI is authenticated.")
+            # If 1Password fails, we must NOT leak the details to logs or terminal unless forced
+            # But the user needs them. We'll show them ONCE with a warning.
+            click.echo("\nDisplaying details ONCE since 1Password failed:")
+            click.echo(f"  Number: {card_data.get('cardNumber')}")
+            click.echo(f"  Expiry: {card_data.get('expiryDate')}")
+            click.echo(f"  CVV:    {card_data.get('cvv')}")
+
+        # Log creation (sanitized - NO PAN/CVV in logs!)
+        _log_action("CARD_CREATED", {
+            "card_id": card_data.get("id"),
+            "name": _sanitize_for_log(name),
+            "limit": limit,
+            "merchant": _sanitize_for_log(merchant) if merchant else None,
+            "single_use": single_use
+        })
+        
+        # Display result (mask sensitive data)
+        result = {
+            "id": card_data.get("id"),
+            "name": card_data.get("name"),
+            "limit": card_data.get("limit"),
+            "status": card_data.get("status"),
+            "card_number": _mask_card_number(card_data.get("cardNumber")),
+            "message": "Card created successfully",
+        }
+        
+        click.echo(json.dumps(result, indent=2))
+        click.echo(f"\n💳 Card '{name}' created with ${limit:.2f} limit.")
+        
+        if merchant:
+            click.echo(f"🔒 Locked to merchant: {merchant}")
+        if single_use:
+            click.echo("🔥 Single-use mode: will auto-terminate after first transaction")
+        
+        click.echo("\n💡 Tip: Use 'klutch card list' to view all cards")
+        
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+
+@card.command("terminate")
+@click.argument("card_id")
+@click.option("--force", is_flag=True, required=True, 
+              help="Required flag to confirm permanent termination")
+@click.pass_obj
+def card_terminate(ctx: Context, card_id: str, force: bool) -> None:
+    """Permanently terminate a virtual card (cannot be undone)."""
+    if not force:
+        raise click.UsageError("Termination requires --force flag for safety")
+    
+    cfg = _load_config()
+    endpoint = cfg["api"]["endpoint"]
+    
+    # Confirm unless in yolo mode
+    if not ctx.yolo:
+        if not click.confirm(f"⚠️  Permanently terminate card {card_id}? This cannot be undone."):
+            click.echo("Cancelled.")
+            return
+    
+    try:
+        token = get_token(endpoint)
+        
+        query = """
+        mutation($id: ID!) {
+            terminateVirtualCard(id: $id) {
+                id
+                status
+            }
+        }
+        """
+        
+        variables = {"id": card_id}
+        data = _api_request(query, endpoint, token, cfg, variables)
+        card_data = data.get("terminateVirtualCard", {})
+        
+        # Validate response
+        if not card_data or not card_data.get("id"):
+            raise click.ClickException("Termination failed: invalid response from API")
+        
+        # Log termination
+        _log_action("CARD_TERMINATED", {"card_id": card_id})
+        
+        click.echo(json.dumps({
+            "id": card_data.get("id"),
+            "status": card_data.get("status"),
+            "message": "Card terminated successfully"
+        }, indent=2))
+        
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+
+def _sanitize_for_log(value: str) -> str:
+    """Sanitize a string for logging to prevent injection."""
+    if not value:
+        return ""
+    # Remove newlines and limit length
+    sanitized = value.replace("\n", " ").replace("\r", " ").replace("[", "").replace("]", "")
+    return sanitized[:100]
+
+
+def _log_action(action: str, details: dict) -> None:
+    """Log card operations to audit file with proper permissions."""
+    import os
+    from datetime import datetime
+    
+    audit_dir = Path.home() / ".local" / "share" / "klutch"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    audit_file = audit_dir / "audit.log"
+    
+    # Create file with restrictive permissions if it doesn't exist
+    if not audit_file.exists():
+        audit_file.touch()
+        audit_file.chmod(0o600)
+    
+    timestamp = datetime.now().isoformat()
+    
+    # Build safe details string
+    safe_details = []
+    for k, v in sorted(details.items()):
+        if v is not None:
+            safe_details.append(f"{_sanitize_for_log(k)}={_sanitize_for_log(str(v))}")
+    
+    details_str = ", ".join(safe_details)
+    log_entry = f"[{timestamp}] {action}: {details_str}\n"
+    
+    with open(audit_file, "a") as f:
+        f.write(log_entry)
 
 
 @card.command("spending")
