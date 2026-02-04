@@ -1,6 +1,6 @@
 ---
 name: klutch
-description: OpenClaw skill for Klutch programmable credit card API integration. View cards, transactions, spending categories, and analyze spending patterns.
+description: Klutch Agentic Credit Card OpenClaw Skill. Manage virtual cards, transactions, and automated spending patterns.
 metadata:
   openclaw:
     emoji: 💳

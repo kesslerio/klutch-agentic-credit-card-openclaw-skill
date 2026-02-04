@@ -265,7 +265,7 @@ def card_create(ctx: Context, name: str, limit: float, merchant: Optional[str],
     try:
         token = get_token(endpoint)
         
-        # Build GraphQL mutation - don't request sensitive fields
+        # Build GraphQL mutation - request sensitive fields for 1Password storage
         query = """
         mutation($input: VirtualCardInput!) {
             createVirtualCard(input: $input) {
@@ -273,6 +273,9 @@ def card_create(ctx: Context, name: str, limit: float, merchant: Optional[str],
                 name
                 limit
                 status
+                cardNumber
+                expiryDate
+                cvv
             }
         }
         """
@@ -298,7 +301,24 @@ def card_create(ctx: Context, name: str, limit: float, merchant: Optional[str],
         if not card_data.get("id"):
             raise click.ClickException("Card creation failed: no card ID returned from API")
         
-        # Log creation (sanitized)
+        # Save to 1Password
+        op_title = f"Klutch Virtual Card: {name}"
+        if merchant:
+            op_title += f" ({merchant})"
+            
+        click.echo(f"Saving card details to 1Password: '{op_title}'...")
+        if save_card_to_1password(op_title, card_data):
+            click.echo("✅ Saved to 1Password.")
+        else:
+            click.echo("⚠️  Failed to save to 1Password. Make sure 'op' CLI is authenticated.")
+            # If 1Password fails, we must NOT leak the details to logs or terminal unless forced
+            # But the user needs them. We'll show them ONCE with a warning.
+            click.echo("\nDisplaying details ONCE since 1Password failed:")
+            click.echo(f"  Number: {card_data.get('cardNumber')}")
+            click.echo(f"  Expiry: {card_data.get('expiryDate')}")
+            click.echo(f"  CVV:    {card_data.get('cvv')}")
+
+        # Log creation (sanitized - NO PAN/CVV in logs!)
         _log_action("CARD_CREATED", {
             "card_id": card_data.get("id"),
             "name": _sanitize_for_log(name),
@@ -307,12 +327,13 @@ def card_create(ctx: Context, name: str, limit: float, merchant: Optional[str],
             "single_use": single_use
         })
         
-        # Display result (no sensitive data)
+        # Display result (mask sensitive data)
         result = {
             "id": card_data.get("id"),
             "name": card_data.get("name"),
             "limit": card_data.get("limit"),
             "status": card_data.get("status"),
+            "card_number": _mask_card_number(card_data.get("cardNumber")),
             "message": "Card created successfully",
         }
         
