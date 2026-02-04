@@ -121,6 +121,46 @@ def clear_token() -> None:
         TOKEN_PATH.unlink()
 
 
+def save_card_to_1password(item_name: str, card_data: dict) -> bool:
+    """Save virtual card details to 1Password.
+    
+    Args:
+        item_name: Name for the 1Password item
+        card_data: Dict with cardNumber, expiryDate, cvv, id
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Create a new credit card item in 1Password
+        card_number = card_data.get("cardNumber", "")
+        expiry = card_data.get("expiryDate", "")
+        cvv = card_data.get("cvv", "")
+        card_id = card_data.get("id", "")
+        
+        # Build the item creation command
+        cmd = [
+            "op", "item", "create",
+            "--category", "credit-card",
+            "--title", item_name,
+        ]
+        
+        # Add card fields
+        if card_number:
+            cmd.extend(["cardNumber=" + card_number])
+        if expiry:
+            cmd.extend(["expiry=" + expiry])
+        if cvv:
+            cmd.extend(["cvv=" + cvv])
+        if card_id:
+            cmd.extend(["cardId=" + card_id])
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def get_token(endpoint: str, force_refresh: bool = False) -> str:
     """Get valid session token (cached or new)."""
     client_id, secret_key = get_credentials()

@@ -15,7 +15,7 @@ from typing import Any, Optional
 import click
 import requests
 
-from auth import get_token, clear_token
+from auth import get_token, clear_token, save_card_to_1password
 
 CONFIG_PATH = Path.home() / ".config" / "klutch" / "config.json"
 TOKEN_PATH = Path.home() / ".config" / "klutch" / "token.json"
@@ -234,14 +234,13 @@ def card_categories(ctx: Context) -> None:
 
 @card.command("create")
 @click.option("--name", "-n", required=True, help="Display name for the virtual card")
-@click.option("--limit", "-l", type=float, required=True, help="Spending limit in dollars")
+@click.option("--limit", "-l", type=click.FloatRange(min=0.01), required=True, help="Spending limit in dollars")
 @click.option("--merchant", "-m", help="Lock card to specific merchant name")
 @click.option("--category", "-c", help="Restrict to transaction category")
 @click.option("--single-use", is_flag=True, help="Auto-terminate after first transaction")
-@click.option("--yolo", is_flag=True, hidden=True)
 @click.pass_obj
 def card_create(ctx: Context, name: str, limit: float, merchant: Optional[str], 
-                category: Optional[str], single_use: bool, yolo: bool) -> None:
+                category: Optional[str], single_use: bool) -> None:
     """Create a new virtual card with spending controls."""
     cfg = _load_config()
     endpoint = cfg["api"]["endpoint"]
@@ -256,8 +255,9 @@ def card_create(ctx: Context, name: str, limit: float, merchant: Optional[str],
             f"Adjust 'autonomous.max_per_card' in config to increase."
         )
     
-    # Check if approval required (not in yolo mode)
-    if not yolo and not ctx.yolo and limit > require_approval:
+    # Check if approval required (not in yolo mode and autonomous not enabled)
+    autonomous_enabled = cfg.get("autonomous", {}).get("enabled", False)
+    if not ctx.yolo and limit > require_approval:
         if not click.confirm(f"Create card '{name}' with ${limit:.2f} limit?"):
             click.echo("Cancelled.")
             return
@@ -265,7 +265,7 @@ def card_create(ctx: Context, name: str, limit: float, merchant: Optional[str],
     try:
         token = get_token(endpoint)
         
-        # Build GraphQL mutation
+        # Build GraphQL mutation - don't request sensitive fields
         query = """
         mutation($input: VirtualCardInput!) {
             createVirtualCard(input: $input) {
@@ -273,9 +273,6 @@ def card_create(ctx: Context, name: str, limit: float, merchant: Optional[str],
                 name
                 limit
                 status
-                cardNumber
-                expiryDate
-                cvv
             }
         }
         """
@@ -297,30 +294,37 @@ def card_create(ctx: Context, name: str, limit: float, merchant: Optional[str],
         data = _api_request(query, endpoint, token, cfg, variables)
         card_data = data.get("createVirtualCard", {})
         
-        # Log creation
+        # Validate response has required fields
+        if not card_data.get("id"):
+            raise click.ClickException("Card creation failed: no card ID returned from API")
+        
+        # Log creation (sanitized)
         _log_action("CARD_CREATED", {
             "card_id": card_data.get("id"),
-            "name": name,
+            "name": _sanitize_for_log(name),
             "limit": limit,
-            "merchant": merchant,
+            "merchant": _sanitize_for_log(merchant) if merchant else None,
             "single_use": single_use
         })
         
-        # Display result (mask card number)
+        # Display result (no sensitive data)
         result = {
             "id": card_data.get("id"),
             "name": card_data.get("name"),
             "limit": card_data.get("limit"),
             "status": card_data.get("status"),
-            "card_number": _mask_card_number(card_data.get("cardNumber")),
-            "expiry": card_data.get("expiryDate"),
-            "cvv": "***" if card_data.get("cvv") else None,
+            "message": "Card created successfully",
         }
         
         click.echo(json.dumps(result, indent=2))
+        click.echo(f"\n💳 Card '{name}' created with ${limit:.2f} limit.")
         
-        if card_data.get("cardNumber"):
-            click.echo("\n⚠️  Copy card details immediately - they won't be shown again!")
+        if merchant:
+            click.echo(f"🔒 Locked to merchant: {merchant}")
+        if single_use:
+            click.echo("🔥 Single-use mode: will auto-terminate after first transaction")
+        
+        click.echo("\n💡 Tip: Use 'klutch card list' to view all cards")
         
     except ValueError as e:
         raise click.ClickException(str(e))
@@ -361,6 +365,10 @@ def card_terminate(ctx: Context, card_id: str, force: bool) -> None:
         data = _api_request(query, endpoint, token, cfg, variables)
         card_data = data.get("terminateVirtualCard", {})
         
+        # Validate response
+        if not card_data or not card_data.get("id"):
+            raise click.ClickException("Termination failed: invalid response from API")
+        
         # Log termination
         _log_action("CARD_TERMINATED", {"card_id": card_id})
         
@@ -374,17 +382,17 @@ def card_terminate(ctx: Context, card_id: str, force: bool) -> None:
         raise click.ClickException(str(e))
 
 
-def _mask_card_number(card_number: Optional[str]) -> Optional[str]:
-    """Mask card number for display, showing only last 4 digits."""
-    if not card_number:
-        return None
-    if len(card_number) <= 4:
-        return "****"
-    return "****-****-****-" + card_number[-4:]
+def _sanitize_for_log(value: str) -> str:
+    """Sanitize a string for logging to prevent injection."""
+    if not value:
+        return ""
+    # Remove newlines and limit length
+    sanitized = value.replace("\n", " ").replace("\r", " ").replace("[", "").replace("]", "")
+    return sanitized[:100]
 
 
 def _log_action(action: str, details: dict) -> None:
-    """Log card operations to audit file."""
+    """Log card operations to audit file with proper permissions."""
     import os
     from datetime import datetime
     
@@ -392,8 +400,20 @@ def _log_action(action: str, details: dict) -> None:
     audit_dir.mkdir(parents=True, exist_ok=True)
     audit_file = audit_dir / "audit.log"
     
+    # Create file with restrictive permissions if it doesn't exist
+    if not audit_file.exists():
+        audit_file.touch()
+        audit_file.chmod(0o600)
+    
     timestamp = datetime.now().isoformat()
-    details_str = ", ".join(f"{k}={v}" for k, v in details.items())
+    
+    # Build safe details string
+    safe_details = []
+    for k, v in sorted(details.items()):
+        if v is not None:
+            safe_details.append(f"{_sanitize_for_log(k)}={_sanitize_for_log(str(v))}")
+    
+    details_str = ", ".join(safe_details)
     log_entry = f"[{timestamp}] {action}: {details_str}\n"
     
     with open(audit_file, "a") as f:
