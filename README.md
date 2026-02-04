@@ -161,6 +161,30 @@ rm ~/.config/klutch/token.json
 - Session tokens are refreshed automatically when needed
 - Consider using 1Password CLI for credential injection (see issue #10)
 
+## Hypothetical Agent Use Cases & Prompts
+
+The Klutch skill enables OpenClaw agents to manage their own financial resources or act as your personal financial assistant.
+
+### 1. Autonomous Sub-Agent Budgeting
+Allow a sub-agent to handle its own costs for a specific task.
+*   **Prompt:** "Spawn a research agent to analyze this market. Create a Klutch virtual card for it named 'Research Task' with a $20 limit for API and tool access."
+
+### 2. Smart Subscription Monitoring
+Monitor recurring charges and alert on changes.
+*   **Prompt:** "Check my Klutch transactions every Monday. If my Netflix or AWS subscription cost changes by more than 10%, send me an alert on Telegram."
+
+### 3. Category Spending Analysis
+Get insights into where your money is going.
+*   **Prompt:** "Summarize my Klutch spending for the 'FOOD' and 'FUN' categories this month. Tell me if I'm on track to stay under my $500 budget."
+
+### 4. Merchant-Locked Security
+Automatically secure your online shopping.
+*   **Prompt:** "I'm about to buy something from a new store. Create a Klutch virtual card named 'One-time Shop' with a $50 limit and lock it to the merchant name 'CoolGadgets.com'."
+
+### 5. Expense Reporting
+Generate automated summaries for your records.
+*   **Prompt:** "At the end of every month, list my top 10 Klutch transactions and categorize them into a Markdown table for my journal."
+
 ## License
 
 MIT License - see LICENSE file for details.
