@@ -11,6 +11,7 @@
 - **Spending Categories**: View transaction categories and MCC codes
 - **Spending Analysis**: Group transactions by category
 - **Configuration Management**: Customize API endpoint, timeouts, and safety guardrails
+- **Dashboard Automation**: Full card lifecycle via browser automation (see Browser Module below)
 
 ## Prerequisites
 
@@ -134,8 +135,8 @@ python scripts/klutch.py card spending
 
 **⚠️ API Limitations:**
 
-- **Card Details:** Klutch's API does not return sensitive card details (PAN/CVV/expiry). After creation, retrieve card details from the [Klutch Dashboard](https://dashboard.klutchcard.com/) or mobile app.
-- **Card Termination:** The API does not currently support card termination. To close a card, use the Klutch Dashboard or contact support.
+- **Card Details:** Klutch's API does not return sensitive card details (PAN/CVV/expiry). Use `klutch_browser.py` to create cards with full details, or retrieve them from the [Klutch Dashboard](https://dashboard.klutchcard.com/).
+- **Card Termination:** The API does not currently support card termination. Use `klutch_browser.py terminate` or the Klutch Dashboard.
 
 ### Configuration Management
 
@@ -183,6 +184,36 @@ The skill includes configurable safety limits for autonomous use:
 - `enabled`: Allow autonomous card creation without prompts
 - `max_per_card`: Maximum spending limit for any single card
 - `require_approval_above`: Amount above which confirmation is required
+
+## Browser Module
+
+For full card details (PAN/CVV/expiry) and card termination, use the browser automation module:
+
+```bash
+# Create card with full details
+python scripts/klutch_browser.py create --name "Test Card" --limit 100
+
+# Get card details
+python scripts/klutch_browser.py details --card-id crd_xxx
+
+# List all cards
+python scripts/klutch_browser.py list
+
+# Terminate a card
+python scripts/klutch_browser.py terminate --card-id crd_xxx --yes
+```
+
+The browser module provides:
+- Full card details (PAN, CVV, expiry) via dashboard
+- Card termination support
+- Auto-save to 1Password on creation
+
+See [selectors.md](selectors.md) for UI selector documentation.
+
+### Browser Prerequisites
+
+- OpenClaw browser tool configured
+- 1Password CLI (`op`) for credential/card storage
 
 ## Security Notes
 
