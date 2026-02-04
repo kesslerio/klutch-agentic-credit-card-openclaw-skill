@@ -1,0 +1,19 @@
+{
+  "autonomous": {
+    "enabled": false,
+    "max_per_card": 200,
+    "max_daily_total": 500,
+    "allowed_merchants": [],
+    "blocked_categories": ["gambling", "cryptocurrency", "adult"],
+    "require_approval_above": 100
+  },
+  "notifications": {
+    "every_transaction": false,
+    "threshold_amount": 25
+  },
+  "api": {
+    "base_url": "https://api.klutchcard.com/graphql",
+    "timeout": 30,
+    "max_retries": 3
+  }
+}
