@@ -2,117 +2,94 @@
 
 This document contains UI selectors for browser automation of the Klutch Dashboard.
 
-**Note:** Selectors may change with UI updates. Update this file when testing reveals changes.
+**Verified Selectors** (tested 2026-02-04):
+- Login URL: `https://app.klutch.cards/login`
 
 ---
 
-## Login Page
+## Verified Login Page
 
-| Element | Selector | Description |
-|---------|----------|-------------|
-| Email input | `input[type="email"]`, `input[name="email"]`, `input[id*="email"]` | Email/username field |
-| Password input | `input[type="password"]`, `input[name="password"]` | Password field |
-| Sign in button | `button[type="submit"]`, `button:has-text("Sign in")`, `button:has-text("Log in")` | Submit login form |
+| Element | Verified Selector | Description |
+|---------|------------------|-------------|
+| Email input | `textbox "Email Address"` | Email/username field |
+| Password input | `textbox "Password"` | Password field |
+| Sign In button | `button "Sign In"` | Submit login form |
 
 ---
 
-## Dashboard / Cards List Page
+## Hypothetical Selectors (Need Verification)
 
-| Element | Selector | Description |
-|---------|----------|-------------|
-| Dashboard container | `[data-testid="dashboard"]`, `.dashboard`, `nav` | Main dashboard area |
+The following selectors are estimates based on typical SPA patterns. **Update when verified.**
+
+### Dashboard / Cards List Page
+
+| Element | Estimated Selector | Description |
+|---------|-------------------|-------------|
 | Cards page | `[data-testid="cards-page"]`, `.cards-page` | Cards listing page |
 | Cards list | `[data-testid="cards-list"]`, `.cards-list` | Container for all cards |
-| Card item | `[data-testid="card-item"]`, `.card-item`, `tr[data-testid*="card"]` | Individual card row/item |
+| Card item | `[data-testid="card-item"]`, `.card-item` | Individual card row/item |
 | Create Card button | `button:has-text("Create Card")`, `[data-testid="create-card"]` | Button to open card creation modal |
 
----
+### Card Creation Modal/Form
 
-## Card Creation Modal/Form
-
-| Element | Selector | Description |
-|---------|----------|-------------|
+| Element | Estimated Selector | Description |
+|---------|-------------------|-------------|
 | Form container | `form`, `.modal`, `[role="dialog"]` | Card creation form |
-| Card name input | `input[name="name"]`, `input[id*="name"]`, `input[placeholder*="name"]` | Card display name |
-| Spend limit input | `input[name="limit"]`, `input[id*="limit"]`, `input[placeholder*="limit"]` | Single transaction limit |
-| Monthly limit input | `input[name="monthlyLimit"]`, `input[id*="monthly"]` | Optional monthly limit |
-| Create button | `button:has-text("Create")`, `button[type="submit"]` | Submit card creation |
+| Card name input | `textbox "Name"`, `input[name="name"]` | Card display name |
+| Spend limit input | `textbox "Limit"`, `input[name="limit"]` | Single transaction limit |
+| Monthly limit input | `textbox "Monthly Limit"`, `input[name="monthlyLimit"]` | Optional monthly limit |
+| Create button | `button "Create"` | Submit card creation |
 
----
+### Card Details Page
 
-## Card Details Page
-
-| Element | Selector | Description |
-|---------|----------|-------------|
+| Element | Estimated Selector | Description |
+|---------|-------------------|-------------|
 | Card details container | `[data-testid="card-details"]`, `.card-details` | Full card details section |
 | Card number/PAN | `.card-number`, `[data-testid="card-number"]` | Full card number display |
 | Card CVV | `.card-cvv`, `[data-testid="cvv"]` | CVV code |
 | Card expiry | `.card-expiry`, `[data-testid="expiry"]` | Expiration date |
 | Card status | `.card-status`, `[data-testid="status"]` | ACTIVE/TERMINATED status |
-| Terminate button | `button:has-text("Terminate")`, `button:has-text("Delete Card")`, `[data-testid="terminate"]` | Delete card button |
+| Terminate button | `button "Terminate"`, `button:has-text("Delete Card")` | Delete card button |
 
----
+### Confirmation Dialogs
 
-## Confirmation Dialogs
-
-| Element | Selector | Description |
-|---------|----------|-------------|
+| Element | Estimated Selector | Description |
+|---------|-------------------|-------------|
 | Confirm modal | `[role="dialog"]`, `.modal-confirm` | Confirmation dialog |
-| Confirm button | `button:has-text("Confirm")`, `button:has-text("Yes")` | Confirm action |
-| Cancel button | `button:has-text("Cancel")`, `button:has-text("No")` | Cancel action |
+| Confirm button | `button "Confirm"`, `button:has-text("Yes")` | Confirm action |
 
 ---
 
-## Common Patterns
-
-### Waiting for Elements
-```python
-# Wait up to 10 seconds for element to appear
-_action = {
-    "action": "snapshot",
-    "selector": "<selector>",
-    "timeoutMs": 10000
-}
-```
-
-### Clicking Elements
-```python
-_action = {
-    "action": "act",
-    "kind": "click",
-    "selector": "<selector>"
-}
-```
-
-### Typing Text
-```python
-_action = {
-    "action": "act",
-    "kind": "type",
-    "selector": "<input-selector>",
-    "text": "text to type"
-}
-```
-
----
-
-## URL Patterns
+## URL Patterns (Verified)
 
 | Page | URL |
 |------|-----|
-| Login | `https://dashboard.klutchcard.com/login` |
-| Cards list | `https://dashboard.klutchcard.com/cards` |
-| Card details | `https://dashboard.klutchcard.com/cards/{card_id}` |
+| Login | `https://app.klutch.cards/login` |
+| Cards | `https://app.klutch.cards/cards` |
+| Card details | `https://app.klutch.cards/cards/{card_id}` |
 
 ---
 
-## Testing Notes
+## Browser Automation Patterns
 
-When selectors change, update this file and run verification:
-1. Navigate to the page
-2. Take a snapshot to find new selectors
-3. Update the table above
-4. Test the automation flow
+### Using refs from snapshot (recommended)
+```python
+# Get refs from snapshot
+snapshot = browser.snapshot()
+# refs like "e1", "e2" are returned for elements
+
+# Type using ref
+browser.act({"kind": "type", "ref": "e2", "text": "email@example.com"})
+
+# Click using ref
+browser.act({"kind": "click", "ref": "e5"})
+```
+
+### Using text selectors (fallback)
+```python
+browser.act({"kind": "click", "selector": "button \"Sign In\""})
+browser.act({"kind": "type", "selector": "textbox \"Password\"", "text": "secret"})
+```
 
 ---
 
@@ -131,3 +108,12 @@ Fields to include when saving cards:
 - `lastFour` (text) - Last 4 digits
 - `cardId` (text) - Klutch card ID
 - `spendLimit` (text) - Spending limit
+
+---
+
+## Testing Notes
+
+1. Navigate to the page
+2. Take a snapshot to get element refs
+3. Use refs for reliable interaction
+4. Update this file with verified selectors

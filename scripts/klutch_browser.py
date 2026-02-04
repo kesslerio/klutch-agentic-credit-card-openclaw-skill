@@ -21,7 +21,7 @@ import click
 
 # Browser tool configuration
 BROWSER_PROFILE = "openclaw"
-KLUTCH_DASHBOARD_URL = "https://dashboard.klutchcard.com"
+KLUTCH_DASHBOARD_URL = "https://app.klutch.cards"
 
 CONFIG_PATH = Path.home() / ".config" / "klutch" / "config.json"
 TOKEN_PATH = Path.home() / ".config" / "klutch" / "token.json"
@@ -110,40 +110,40 @@ class KlutchBrowser:
             "targetUrl": f"{KLUTCH_DASHBOARD_URL}/login"
         })
         
-        # Wait for page load and fill credentials
-        _run_browser_action({
+        # Get page snapshot with refs
+        snapshot = _run_browser_action({
             "action": "snapshot",
             "selector": "form",
             "timeoutMs": 10000
         })
         
-        # Type email (adjust selector based on actual page)
+        # Type email using ref (email is usually pre-filled, may need different ref)
         _run_browser_action({
             "action": "act",
             "kind": "type",
-            "selector": "input[type=\"email\"], input[name=\"email\"], input[id*=\"email\"]",
+            "ref": "e2",  # Email textbox ref
             "text": email
         })
         
-        # Type password
+        # Type password using ref
         _run_browser_action({
             "action": "act",
             "kind": "type",
-            "selector": "input[type=\"password\"], input[name=\"password\"]",
+            "ref": "e3",  # Password textbox ref
             "text": password
         })
         
-        # Click login button
+        # Click login button using ref
         _run_browser_action({
             "action": "act",
             "kind": "click",
-            "selector": "button[type=\"submit\"], button:has-text(\"Sign in\"), button:has-text(\"Log in\")"
+            "ref": "e5"  # Sign In button ref
         })
         
-        # Wait for dashboard to load
+        # Wait for dashboard to load (check for cards page)
         _run_browser_action({
             "action": "snapshot",
-            "selector": "[data-testid=\"dashboard\"], .dashboard, nav",
+            "selector": "[data-testid=\"cards-page\"], .cards-page, nav",
             "timeoutMs": 15000
         })
         
