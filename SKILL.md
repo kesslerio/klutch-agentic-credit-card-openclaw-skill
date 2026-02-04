@@ -1,15 +1,16 @@
 ---
 name: klutch
-description: OpenClaw skill for Klutch programmable credit card API integration. Manage virtual cards, check balances, view transactions with session-based or autonomous modes.
+description: OpenClaw skill for Klutch programmable credit card API integration. View cards, transactions, spending categories, and analyze spending patterns.
 metadata:
   openclaw:
     emoji: 💳
     requires:
       env:
-        - KLUTCH_EMAIL
-        - KLUTCH_PASSWORD
+        - KLUTCH_CLIENT_ID
+        - KLUTCH_SECRET_KEY
       optional_env:
-        - KLUTCH_API_TOKEN
+        - KLUTCH_API_KEY
+        - KLUTCH_API_SECRET
     install:
       - id: pip
         kind: pip
@@ -22,59 +23,51 @@ OpenClaw skill for Klutch programmable credit card API integration.
 
 ## Overview
 
-This skill provides a command-line interface and automation capabilities for managing Klutch programmable credit cards. It supports both session-based (interactive) and autonomous modes for card management, balance checking, and transaction monitoring.
+This skill provides a command-line interface for accessing Klutch credit card data through their GraphQL API. It supports viewing card information, transaction history, spending categories, and spending analysis.
 
 ## Prerequisites
 
-1. **Klutch Account**: You must have an active Klutch account
-2. **API Access**: Register for API credentials through the Klutch developer portal at https://developer.klutchcard.com
+1. **Klutch Account**: Active Klutch credit card account
+2. **API Credentials**: Client ID and Secret Key from Klutch developer portal
 3. **Python 3.10+**: Required for running the scripts
 
 ## Configuration
 
 ### Environment Variables
 
-Set one of the following authentication methods:
+Set your Klutch API credentials:
 
-**Option 1: Email/Password (recommended for initial setup)**
 ```bash
-export KLUTCH_EMAIL="your@email.com"
-export KLUTCH_PASSWORD="your_password"
+export KLUTCH_CLIENT_ID="your-client-id"
+export KLUTCH_SECRET_KEY="your-secret-key"
 ```
 
-**Option 2: API Token (for automated/scripted usage)**
+Or use alternative naming:
+
 ```bash
-export KLUTCH_API_TOKEN="your_jwt_token"
+export KLUTCH_API_KEY="your-client-id"
+export KLUTCH_API_SECRET="your-secret-key"
 ```
 
 ### Configuration File
 
-The skill stores configuration and state in `~/.config/klutch/`:
+The skill stores configuration and session tokens in `~/.config/klutch/`:
 
 ```bash
 ~/.config/klutch/
-├── config.json      # User preferences and autonomous settings
-├── token.json       # Cached JWT token (auto-managed)
-└── audit.log        # Audit trail of card operations
+├── config.json      # User preferences
+└── token.json       # Cached session token (auto-managed)
 ```
 
-### Autonomous Mode Configuration
+### Configuration Options
 
-Edit `~/.config/klutch/config.json` to customize autonomous behavior:
+Edit `~/.config/klutch/config.json` to customize:
 
 ```json
 {
-  "autonomous": {
-    "enabled": false,
-    "max_per_card": 200,
-    "max_daily_total": 500,
-    "allowed_merchants": [],
-    "blocked_categories": ["gambling", "cryptocurrency", "adult"],
-    "require_approval_above": 100
-  },
-  "notifications": {
-    "every_transaction": false,
-    "threshold_amount": 25
+  "api": {
+    "endpoint": "https://graphql.klutchcard.com/graphql",
+    "timeout": 30
   }
 }
 ```
@@ -84,144 +77,102 @@ Edit `~/.config/klutch/config.json` to customize autonomous behavior:
 ### Balance
 
 ```bash
-# Check current account balance
+# Check card information
 python scripts/klutch.py balance
 
 # Example output:
-# Current Balance: $1,234.56
-# Available Credit: $5,000.00
+{
+  "cards": [
+    {
+      "id": "crd_xxx",
+      "name": "Martin Kessler",
+      "status": "ACTIVE"
+    }
+  ]
+}
 ```
 
 ### Transactions
 
 ```bash
-# List recent transactions (default: 10)
+# List recent transactions (last 30 days)
 python scripts/klutch.py transactions
 
-# List more transactions
+# Limit results
 python scripts/klutch.py transactions --limit 25
 
 # Example output:
-# ID          Date       Merchant          Amount    Status
-# ----------  ---------  ----------------  --------  --------
-# txn_abc123  2024-01-15 Starbucks         $5.67     settled
-# txn_def456  2024-01-14 Amazon            $45.23    pending
+{
+  "transactions": [
+    {
+      "id": "txn_xxx",
+      "amount": -100.0,
+      "merchantName": "Checking",
+      "transactionStatus": "SETTLED"
+    }
+  ]
+}
 ```
 
 ### Card Management
 
-#### Create Virtual Card
-
-```bash
-# Basic virtual card
-python scripts/klutch.py card create --name "Online Shopping" --limit 100
-
-# Merchant-locked card
-python scripts/klutch.py card create --name "Netflix" --limit 15.99 --merchant "Netflix"
-
-# Category-restricted card
-python scripts/klutch.py card create --name "Groceries" --limit 200 --category "grocery"
-
-# Autonomous mode (bypass approval prompts)
-python scripts/klutch.py card create --name "Subscription" --limit 10 --yolo
-```
-
 #### List Cards
 
 ```bash
-# Show all virtual cards
 python scripts/klutch.py card list
-
-# Example output:
-# ID           Name              Limit     Spent    Status
-# -----------  ----------------  --------  -------  --------
-# card_abc123  Online Shopping   $100.00   $23.45   active
-# card_def456  Netflix           $15.99    $15.99   active
 ```
 
-#### Pause Card
+#### View Categories
 
 ```bash
-# Temporarily pause a card
-python scripts/klutch.py card pause card_abc123
-
-# Requires confirmation in session mode
-# Use --yolo for autonomous operation
+python scripts/klutch.py card categories
 ```
 
-#### Terminate Card
+#### View Spending by Category
 
 ```bash
-# Permanently terminate a card (requires --force)
-python scripts/klutch.py card terminate card_abc123 --force
-
-# Autonomous mode
-python scripts/klutch.py card terminate card_abc123 --force --yolo
+python scripts/klutch.py card spending
 ```
 
 ### Configuration Management
 
 ```bash
 # Get configuration value
-python scripts/klutch.py config get autonomous.max_per_card
+python scripts/klutch.py config get api.timeout
 
 # Set configuration value
-python scripts/klutch.py config set autonomous.max_per_card 150
+python scripts/klutch.py config set api.timeout 60
 
 # View all configuration
 python scripts/klutch.py config get
 ```
 
-## Safety Guardrails
+## API Endpoints
 
-### Hardcoded Protections
+The skill connects to Klutch's GraphQL API:
 
-The following restrictions are **non-configurable** and enforced regardless of user settings:
+| Environment | Endpoint |
+|-------------|----------|
+| Production | `https://graphql.klutchcard.com/graphql` |
+| Sandbox | `https://sandbox.klutchcard.com/graphql` |
 
-| Category | Behavior |
-|----------|----------|
-| Blocked Categories | `gambling`, `cryptocurrency`, `adult` - cannot be overridden |
-| Card Termination | Requires explicit `--force` flag to prevent accidental deletion |
-| Audit Logging | All card creation operations are logged to `~/.local/share/klutch/audit.log` |
+## Authentication Flow
 
-### Configurable Limits
+The skill uses Klutch's session token authentication:
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `max_per_card` | $200 | Maximum spending limit for any single card |
-| `max_daily_total` | $500 | Maximum total spending across all cards per day |
-| `require_approval_above` | $100 | Transactions above this amount require explicit approval |
-
-### Session vs Autonomous Modes
-
-**Session Mode (default):**
-- Prompts for approval on card creation > $100
-- Prompts for confirmation on card termination
-- Interactive confirmation for all significant operations
-
-**Autonomous Mode (`--yolo`):**
-- Bypasses approval prompts
-- Respects all safety limits
-- Suitable for trusted automation workflows
-- Enable with `--yolo` flag or `autonomous.enabled: true` in config
-
-### Audit Logging
-
-All card creation operations are logged to `~/.local/share/klutch/audit.log`:
-
-```
-[2024-01-15T09:23:45] CARD_CREATED: card_id=card_abc123, name="Online Shopping", limit=100.00, created_by=session
-[2024-01-15T10:15:22] CARD_TERMINATED: card_id=card_def456, reason=user_request
-```
+1. **Initial Request**: Sends `createSessionToken` mutation with Client ID and Secret Key
+2. **Token Caching**: Stores the JWT session token in `~/.config/klutch/token.json`
+3. **Subsequent Requests**: Uses cached token until it expires
+4. **Auto-Refresh**: Creates a new session token when the cached one fails
 
 ## Error Handling
 
 The skill handles common error scenarios:
 
-- **Authentication failures**: Prompts to re-authenticate
-- **Rate limiting**: Automatic retry with exponential backoff
+- **Authentication failures**: Prompts to verify credentials
+- **Session expiration**: Automatically creates a new session token
 - **Network errors**: Clear error messages with retry suggestions
-- **Invalid operations**: Pre-validation before API calls
+- **GraphQL errors**: Detailed error messages from the API
 
 ## Integration with OpenClaw
 
@@ -231,21 +182,7 @@ The skill handles common error scenarios:
 # OpenClaw can invoke the skill directly
 klutch balance
 klutch transactions --limit 5
-klutch card create --name "Test" --limit 50
-```
-
-### Cron Automation
-
-Set up automated balance checks:
-
-```json
-{
-  "cron": [{
-    "schedule": "0 9 * * *",
-    "command": "klutch balance",
-    "channel": "telegram"
-  }]
-}
+klutch card list
 ```
 
 ## Troubleshooting
@@ -255,25 +192,17 @@ Set up automated balance checks:
 If you receive authentication errors:
 1. Verify your credentials with `python scripts/klutch.py config get`
 2. Delete `~/.config/klutch/token.json` to force re-authentication
-3. Check that your API token hasn't expired
+3. Check that your API credentials are correct
 
-### Rate Limiting
+### Session Token Issues
 
-The Klutch API has rate limits. The skill implements:
-- Automatic retry with backoff
-- Request caching for non-mutating operations
-- Clear messaging when limits are hit
-
-### Permission Denied
-
-Ensure the scripts are executable:
+Force token refresh:
 ```bash
-chmod +x scripts/klutch.py
+rm ~/.config/klutch/token.json
 ```
 
 ## Security Notes
 
 - Never commit credentials to version control
-- The skill stores tokens in `~/.config/klutch/token.json` with 600 permissions
-- API tokens are refreshed automatically before expiration
-- Consider using 1Password CLI for credential injection in CI/CD environments
+- The skill stores tokens in `~/.config/klutch/token.json`
+- Session tokens are refreshed automatically when needed
