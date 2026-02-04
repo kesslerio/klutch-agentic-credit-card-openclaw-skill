@@ -1,636 +1,334 @@
 #!/usr/bin/env python3
-"""
-Klutch CLI - OpenClaw skill for Klutch programmable credit card API integration.
+"""Klutch CLI - OpenClaw skill for Klutch programmable credit card API."""
 
-This script provides a command-line interface for managing Klutch virtual cards,
-checking balances, and viewing transactions with session-based or autonomous modes.
-"""
+from __future__ import annotations
 
+import json
 import os
 import sys
-import json
 import time
-import logging
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Optional, Dict, List, Any
-from dataclasses import dataclass, asdict
+from typing import Any, Optional
 
 import click
 import requests
-from gql import Client, gql
-from gql.transport.requests import RequestsHTTPTransport
 
-# Configuration paths
-CONFIG_DIR = Path.home() / ".config" / "klutch"
-DATA_DIR = Path.home() / ".local" / "share" / "klutch"
-CONFIG_FILE = CONFIG_DIR / "config.json"
-TOKEN_FILE = CONFIG_DIR / "token.json"
-AUDIT_LOG = DATA_DIR / "audit.log"
+from auth import get_token, clear_token
 
-# Default configuration
-DEFAULT_CONFIG = {
+CONFIG_PATH = Path.home() / ".config" / "klutch" / "config.json"
+TOKEN_PATH = Path.home() / ".config" / "klutch" / "token.json"
+
+DEFAULT_TIMEOUT = 30
+DEFAULT_CONFIG: dict[str, Any] = {
+    "api": {
+        "endpoint": "https://graphql.klutchcard.com/graphql",
+        "timeout": DEFAULT_TIMEOUT,
+        "max_retries": 2,
+    },
     "autonomous": {
         "enabled": False,
         "max_per_card": 200,
-        "max_daily_total": 500,
-        "allowed_merchants": [],
-        "blocked_categories": ["gambling", "cryptocurrency", "adult"],
-        "require_approval_above": 100
-    },
-    "notifications": {
-        "every_transaction": False,
-        "threshold_amount": 25
-    },
-    "api": {
-        "base_url": "https://api.klutchcard.com/graphql",
-        "timeout": 30,
-        "max_retries": 3
+        "require_approval_above": 100,
     }
 }
 
-# Hardcoded blocked categories (cannot be overridden)
-HARDCODED_BLOCKED_CATEGORIES = {"gambling", "cryptocurrency", "adult"}
-
 
 @dataclass
-class KlutchConfig:
-    """Configuration for Klutch skill."""
-    autonomous_enabled: bool
-    max_per_card: float
-    max_daily_total: float
-    allowed_merchants: List[str]
-    blocked_categories: List[str]
-    require_approval_above: float
-    api_base_url: str
-    api_timeout: int
-    api_max_retries: int
+class Context:
+    yolo: bool
 
 
-class KlutchAPI:
-    """Client for Klutch GraphQL API."""
-    
-    def __init__(self, config: KlutchConfig):
-        self.config = config
-        self.token = None
-        self.token_expiry = None
-        self._load_token()
-        self._setup_client()
-    
-    def _load_token(self):
-        """Load cached token or authenticate."""
-        # Check environment variable first
-        env_token = os.environ.get("KLUTCH_API_TOKEN")
-        if env_token:
-            self.token = env_token
-            self.token_expiry = datetime.now() + timedelta(hours=24)
-            return
-        
-        # Check cached token
-        if TOKEN_FILE.exists():
-            try:
-                with open(TOKEN_FILE) as f:
-                    data = json.load(f)
-                self.token = data.get("token")
-                self.token_expiry = datetime.fromisoformat(data.get("expiry", "2000-01-01"))
-                
-                # Refresh if expired or about to expire
-                if datetime.now() >= self.token_expiry - timedelta(minutes=5):
-                    self._authenticate()
-            except (json.JSONDecodeError, KeyError, ValueError):
-                self._authenticate()
+def _deep_update(base_dict: dict, update_with: dict) -> dict:
+    """Recursively update a dictionary."""
+    for key, value in update_with.items():
+        if isinstance(value, dict) and key in base_dict and isinstance(base_dict[key], dict):
+            _deep_update(base_dict[key], value)
         else:
-            self._authenticate()
-    
-    def _authenticate(self):
-        """Authenticate with email/password to get JWT token."""
-        email = os.environ.get("KLUTCH_EMAIL")
-        password = os.environ.get("KLUTCH_PASSWORD")
-        
-        if not email or not password:
-            raise click.UsageError(
-                "Authentication required. Set KLUTCH_EMAIL and KLUTCH_PASSWORD "
-                "environment variables, or KLUTCH_API_TOKEN for token-based auth."
-            )
-        
-        # GraphQL mutation for login
-        mutation = gql("""
-            mutation Login($email: String!, $password: String!) {
-                login(email: $email, password: $password) {
-                    token
-                    expiresAt
-                }
-            }
-        """)
-        
+            base_dict[key] = value
+    return base_dict
+
+
+def _load_config() -> dict[str, Any]:
+    cfg = DEFAULT_CONFIG.copy()
+    if CONFIG_PATH.exists():
         try:
-            transport = RequestsHTTPTransport(
-                url=self.config.api_base_url,
-                headers={"Content-Type": "application/json"}
-            )
-            client = Client(transport=transport, fetch_schema_from_transport=False)
-            result = client.execute(mutation, {"email": email, "password": password})
-            
-            self.token = result["login"]["token"]
-            expiry_str = result["login"].get("expiresAt")
-            if expiry_str:
-                self.token_expiry = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
-            else:
-                self.token_expiry = datetime.now() + timedelta(hours=24)
-            
-            # Cache token
-            self._save_token()
-            
-        except Exception as e:
-            raise click.ClickException(f"Authentication failed: {e}")
+            user_cfg = json.loads(CONFIG_PATH.read_text())
+            _deep_update(cfg, user_cfg)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return cfg
+
+
+def _save_config(cfg: dict[str, Any]) -> None:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+    CONFIG_PATH.chmod(0o600)
+
+
+def _api_request(query: str, endpoint: str, token: str, cfg: dict[str, Any], variables: Optional[dict] = None) -> dict[str, Any]:
+    """Make a GraphQL API request to Klutch with retry and refresh logic."""
+    timeout = cfg.get("api", {}).get("timeout", DEFAULT_TIMEOUT)
+    max_retries = cfg.get("api", {}).get("max_retries", 2)
     
-    def _save_token(self):
-        """Save token to cache file."""
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        TOKEN_FILE.write_text(json.dumps({
-            "token": self.token,
-            "expiry": self.token_expiry.isoformat()
-        }))
-        # Restrict permissions
-        os.chmod(TOKEN_FILE, 0o600)
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload: dict[str, Any] = {"query": query}
+    if variables:
+        payload["variables"] = variables
     
-    def _setup_client(self):
-        """Set up GraphQL client with authentication."""
-        transport = RequestsHTTPTransport(
-            url=self.config.api_base_url,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.token}"
-            },
-            timeout=self.config.api_timeout
-        )
-        self.client = Client(transport=transport, fetch_schema_from_transport=False)
-    
-    def execute(self, query, variables=None):
-        """Execute GraphQL query with retry logic."""
-        for attempt in range(self.config.api_max_retries):
-            try:
-                return self.client.execute(query, variables)
-            except Exception as e:
-                if "Unauthorized" in str(e) or "token" in str(e).lower():
-                    # Token expired, re-authenticate
-                    self._authenticate()
-                    self._setup_client()
-                elif attempt < self.config.api_max_retries - 1:
-                    time.sleep(2 ** attempt)  # Exponential backoff
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=timeout)
+            
+            # Handle token expiration (401 Unauthorized)
+            if response.status_code == 401:
+                if attempt < max_retries:
+                    # Clear token and get a new one
+                    clear_token()
+                    new_token = get_token(endpoint, force_refresh=True)
+                    headers["Authorization"] = f"Bearer {new_token}"
+                    continue
                 else:
-                    raise click.ClickException(f"API error: {e}")
+                    raise click.ClickException("Authentication failed (401). Please check your credentials.")
+            
+            if response.status_code >= 400:
+                raise click.ClickException(f"API error ({response.status_code}): {response.text}")
+            
+            try:
+                result = response.json()
+            except json.JSONDecodeError:
+                return {"raw": response.text}
+            
+            if "errors" in result:
+                # Some GraphQL errors might be auth-related
+                msg = str(result["errors"])
+                if "unauthorized" in msg.lower() or "expired" in msg.lower():
+                    if attempt < max_retries:
+                        clear_token()
+                        new_token = get_token(endpoint, force_refresh=True)
+                        headers["Authorization"] = f"Bearer {new_token}"
+                        continue
+                raise click.ClickException(f"GraphQL error: {result['errors']}")
+            
+            return result.get("data", {})
+            
+        except requests.RequestException as e:
+            last_error = e
+            if attempt < max_retries:
+                time.sleep(1)
+                continue
+            raise click.ClickException(f"Network error: {e}")
+            
+    raise click.ClickException(f"API request failed after {max_retries} retries: {last_error}")
 
 
-def load_config() -> KlutchConfig:
-    """Load configuration from file or defaults."""
-    if CONFIG_FILE.exists():
-        with open(CONFIG_FILE) as f:
-            data = json.load(f)
-    else:
-        data = DEFAULT_CONFIG
-    
-    # Merge blocked categories (hardcoded ones cannot be removed)
-    blocked = set(data.get("autonomous", {}).get("blocked_categories", []))
-    blocked.update(HARDCODED_BLOCKED_CATEGORIES)
-    
-    return KlutchConfig(
-        autonomous_enabled=data.get("autonomous", {}).get("enabled", False),
-        max_per_card=data.get("autonomous", {}).get("max_per_card", 200),
-        max_daily_total=data.get("autonomous", {}).get("max_daily_total", 500),
-        allowed_merchants=data.get("autonomous", {}).get("allowed_merchants", []),
-        blocked_categories=list(blocked),
-        require_approval_above=data.get("autonomous", {}).get("require_approval_above", 100),
-        api_base_url=data.get("api", {}).get("base_url", "https://api.klutchcard.com/graphql"),
-        api_timeout=data.get("api", {}).get("timeout", 30),
-        api_max_retries=data.get("api", {}).get("max_retries", 3)
-    )
-
-
-def save_config(config: KlutchConfig):
-    """Save configuration to file."""
-    data = {
-        "autonomous": {
-            "enabled": config.autonomous_enabled,
-            "max_per_card": config.max_per_card,
-            "max_daily_total": config.max_daily_total,
-            "allowed_merchants": config.allowed_merchants,
-            "blocked_categories": [c for c in config.blocked_categories if c not in HARDCODED_BLOCKED_CATEGORIES],
-            "require_approval_above": config.require_approval_above
-        },
-        "api": {
-            "base_url": config.api_base_url,
-            "timeout": config.api_timeout,
-            "max_retries": config.api_max_retries
-        }
-    }
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(data, indent=2))
-
-
-def log_audit(action: str, details: Dict[str, Any]):
-    """Write to audit log."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().isoformat()
-    details_str = ", ".join(f"{k}={v}" for k, v in details.items())
-    log_entry = f"[{timestamp}] {action}: {details_str}\n"
-    with open(AUDIT_LOG, "a") as f:
-        f.write(log_entry)
-
-
-def check_safety_limits(config: KlutchConfig, amount: float, category: Optional[str] = None, 
-                        yolo: bool = False) -> bool:
-    """Check if operation is within safety limits."""
-    # Check blocked categories
-    if category and category.lower() in [c.lower() for c in config.blocked_categories]:
-        raise click.ClickException(f"Category '{category}' is blocked by safety policy")
-    
-    # Check per-card limit
-    if amount > config.max_per_card:
-        raise click.ClickException(
-            f"Amount ${amount:.2f} exceeds max per-card limit of ${config.max_per_card:.2f}"
-        )
-    
-    # Check approval threshold
-    if not yolo and not config.autonomous_enabled and amount > config.require_approval_above:
-        return False  # Requires explicit approval
-    
-    return True
-
-
-# CLI Commands
 @click.group()
-@click.option("--yolo", is_flag=True, help="Enable autonomous mode (skip approval prompts)")
+@click.option("--yolo", is_flag=True, help="Bypass confirmation prompts for autonomous mode.")
 @click.pass_context
-def cli(ctx, yolo):
-    """Klutch CLI - Manage programmable credit cards."""
-    ctx.ensure_object(dict)
-    ctx.obj["yolo"] = yolo
-    ctx.obj["config"] = load_config()
+def cli(ctx: click.Context, yolo: bool) -> None:
+    ctx.obj = Context(yolo=yolo)
 
 
 @cli.command()
-@click.pass_context
-def balance(ctx):
-    """Show current account balance."""
-    config = ctx.obj["config"]
-    api = KlutchAPI(config)
-    
-    query = gql("""
-        query GetBalance {
-            account {
-                currentBalance
-                availableCredit
-                totalCredit
-            }
-        }
-    """)
-    
+@click.pass_obj
+def balance(ctx: Context) -> None:
+    """Check card information."""
+    cfg = _load_config()
+    endpoint = cfg["api"]["endpoint"]
     try:
-        result = api.execute(query)
-        account = result.get("account", {})
+        token = get_token(endpoint)
         
-        click.echo(f"Current Balance: ${account.get('currentBalance', 0):.2f}")
-        click.echo(f"Available Credit: ${account.get('availableCredit', 0):.2f}")
-        click.echo(f"Total Credit: ${account.get('totalCredit', 0):.2f}")
-    except click.ClickException:
-        raise
-    except Exception as e:
-        raise click.ClickException(f"Failed to fetch balance: {e}")
+        card_query = "{ cards { id name status } }"
+        card_data = _api_request(card_query, endpoint, token, cfg)
+        cards = card_data.get("cards", [])
+        
+        result = {
+            "cards": cards,
+            "note": "Use 'klutch transactions' for transaction details",
+        }
+        click.echo(json.dumps(result, indent=2))
+    except ValueError as e:
+        raise click.ClickException(str(e))
 
 
 @cli.command()
-@click.option("--limit", "-n", default=10, help="Number of transactions to show")
-@click.pass_context
-def transactions(ctx, limit):
+@click.option("--limit", type=click.IntRange(min=1), default=10, show_default=True)
+@click.pass_obj
+def transactions(ctx: Context, limit: int) -> None:
     """List recent transactions."""
-    config = ctx.obj["config"]
-    api = KlutchAPI(config)
-    
-    query = gql("""
-        query GetTransactions($limit: Int!) {
-            transactions(limit: $limit) {
+    cfg = _load_config()
+    endpoint = cfg["api"]["endpoint"]
+    try:
+        token = get_token(endpoint)
+        
+        query = """
+        query($filter: TransactionFilter) {
+            transactions(filter: $filter) {
                 id
-                date
-                merchant
                 amount
-                status
-                cardId
+                merchantName
+                transactionStatus
             }
         }
-    """)
-    
-    try:
-        result = api.execute(query, {"limit": limit})
-        transactions = result.get("transactions", [])
+        """
         
-        if not transactions:
-            click.echo("No transactions found.")
-            return
+        now = datetime.now()
+        start_date = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_date = now.strftime("%Y-%m-%dT%H:%M:%SZ")
         
-        # Header
-        click.echo(f"{'ID':<15} {'Date':<12} {'Merchant':<20} {'Amount':>10} {'Status':<10}")
-        click.echo("-" * 75)
+        variables = {
+            "filter": {
+                "startDate": start_date,
+                "endDate": end_date,
+                "transactionStatus": ["SETTLED", "PENDING"],
+            }
+        }
         
-        for txn in transactions:
-            date = txn.get("date", "N/A")[:10]  # Just the date part
-            click.echo(
-                f"{txn.get('id', 'N/A')[:14]:<15} "
-                f"{date:<12} "
-                f"{txn.get('merchant', 'N/A')[:19]:<20} "
-                f"${txn.get('amount', 0):>9.2f} "
-                f"{txn.get('status', 'N/A'):<10}"
-            )
-    except click.ClickException:
-        raise
-    except Exception as e:
-        raise click.ClickException(f"Failed to fetch transactions: {e}")
+        data = _api_request(query, endpoint, token, cfg, variables)
+        transactions_list = data.get("transactions", [])
+        
+        if limit and len(transactions_list) > limit:
+            transactions_list = transactions_list[:limit]
+        
+        click.echo(json.dumps({"transactions": transactions_list}, indent=2))
+    except ValueError as e:
+        raise click.ClickException(str(e))
 
 
 @cli.group()
-def card():
-    """Manage virtual cards."""
-    pass
+def card() -> None:
+    """Manage cards and view card info."""
 
 
-@card.command(name="create")
-@click.option("--name", "-n", required=True, help="Card name")
-@click.option("--limit", "-l", "spend_limit", type=float, required=True, help="Spending limit")
-@click.option("--merchant", "-m", help="Lock to specific merchant")
-@click.option("--category", "-c", help="Category restriction")
-@click.pass_context
-def card_create(ctx, name, spend_limit, merchant, category):
-    """Create a new virtual card."""
-    config = ctx.obj["config"]
-    yolo = ctx.obj["yolo"]
-    
-    # Safety checks
-    requires_approval = not check_safety_limits(config, spend_limit, category, yolo)
-    
-    if requires_approval:
-        if not click.confirm(f"Create card with limit ${spend_limit:.2f}?"):
-            click.echo("Cancelled.")
-            return
-    
-    # Check blocked categories
-    if category and category.lower() in HARDCODED_BLOCKED_CATEGORIES:
-        raise click.ClickException(f"Category '{category}' is blocked by safety policy")
-    
-    api = KlutchAPI(config)
-    
-    mutation = gql("""
-        mutation CreateVirtualCard($input: VirtualCardInput!) {
-            createVirtualCard(input: $input) {
-                id
-                name
-                limit
-                status
+@card.command("list")
+@click.pass_obj
+def card_list(ctx: Context) -> None:
+    """List all cards."""
+    cfg = _load_config()
+    endpoint = cfg["api"]["endpoint"]
+    try:
+        token = get_token(endpoint)
+        query = "{ cards { id name status } }"
+        data = _api_request(query, endpoint, token, cfg)
+        click.echo(json.dumps(data, indent=2))
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+
+@card.command("categories")
+@click.pass_obj
+def card_categories(ctx: Context) -> None:
+    """List transaction categories."""
+    cfg = _load_config()
+    endpoint = cfg["api"]["endpoint"]
+    try:
+        token = get_token(endpoint)
+        query = "{ transactionCategories { id name mccs } }"
+        data = _api_request(query, endpoint, token, cfg)
+        click.echo(json.dumps(data, indent=2))
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+
+@card.command("spending")
+@click.pass_obj
+def card_spending(ctx: Context) -> None:
+    """View spending grouped by category."""
+    cfg = _load_config()
+    endpoint = cfg["api"]["endpoint"]
+    try:
+        token = get_token(endpoint)
+        
+        now = datetime.now()
+        start_date = now.replace(day=1).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_date = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        
+        query = """
+        query($filter: TransactionFilter, $groupBy: TransactionGroupByProperty, $operation: GroupByOperation) {
+            groupTransactions(filter: $filter, groupByProperty: $groupBy, operation: $operation) {
+                key
+                value
             }
         }
-    """)
-    
-    variables = {
-        "input": {
-            "name": name,
-            "limit": spend_limit,
-            **({"merchant": merchant} if merchant else {}),
-            **({"category": category} if category else {})
+        """
+        
+        variables = {
+            "filter": {
+                "startDate": start_date,
+                "endDate": end_date,
+                "transactionStatus": ["SETTLED"],
+                "transactionTypes": ["CHARGE"],
+            },
+            "groupBy": "CATEGORY",
+            "operation": "SUM",
         }
-    }
-    
-    try:
-        result = api.execute(mutation, variables)
-        card_data = result.get("createVirtualCard", {})
         
-        # Log to audit
-        log_audit("CARD_CREATED", {
-            "card_id": card_data.get("id"),
-            "name": name,
-            "limit": spend_limit,
-            "created_by": "autonomous" if (yolo or config.autonomous_enabled) else "session"
-        })
-        
-        click.echo(f"✓ Created virtual card: {card_data.get('name')}")
-        click.echo(f"  ID: {card_data.get('id')}")
-        click.echo(f"  Limit: ${card_data.get('limit', 0):.2f}")
-        click.echo(f"  Status: {card_data.get('status')}")
-    except click.ClickException:
-        raise
-    except Exception as e:
-        raise click.ClickException(f"Failed to create card: {e}")
-
-
-@card.command(name="list")
-@click.pass_context
-def card_list(ctx):
-    """List all virtual cards."""
-    config = ctx.obj["config"]
-    api = KlutchAPI(config)
-    
-    query = gql("""
-        query GetVirtualCards {
-            virtualCards {
-                id
-                name
-                limit
-                spent
-                status
-            }
-        }
-    """)
-    
-    try:
-        result = api.execute(query)
-        cards = result.get("virtualCards", [])
-        
-        if not cards:
-            click.echo("No virtual cards found.")
-            return
-        
-        # Header
-        click.echo(f"{'ID':<15} {'Name':<20} {'Limit':>10} {'Spent':>10} {'Status':<10}")
-        click.echo("-" * 70)
-        
-        for card in cards:
-            click.echo(
-                f"{card.get('id', 'N/A')[:14]:<15} "
-                f"{card.get('name', 'N/A')[:19]:<20} "
-                f"${card.get('limit', 0):>9.2f} "
-                f"${card.get('spent', 0):>9.2f} "
-                f"{card.get('status', 'N/A'):<10}"
-            )
-    except click.ClickException:
-        raise
-    except Exception as e:
-        raise click.ClickException(f"Failed to fetch cards: {e}")
-
-
-@card.command(name="pause")
-@click.argument("card_id")
-@click.pass_context
-def card_pause(ctx, card_id):
-    """Pause a virtual card."""
-    config = ctx.obj["config"]
-    yolo = ctx.obj["yolo"]
-    
-    if not yolo and not config.autonomous_enabled:
-        if not click.confirm(f"Pause card {card_id}?"):
-            click.echo("Cancelled.")
-            return
-    
-    api = KlutchAPI(config)
-    
-    mutation = gql("""
-        mutation PauseVirtualCard($id: ID!) {
-            pauseVirtualCard(id: $id) {
-                id
-                status
-            }
-        }
-    """)
-    
-    try:
-        result = api.execute(mutation, {"id": card_id})
-        card_data = result.get("pauseVirtualCard", {})
-        click.echo(f"✓ Paused card: {card_data.get('id')} (Status: {card_data.get('status')})")
-    except click.ClickException:
-        raise
-    except Exception as e:
-        raise click.ClickException(f"Failed to pause card: {e}")
-
-
-@card.command(name="terminate")
-@click.argument("card_id")
-@click.option("--force", is_flag=True, required=True, help="Required flag to confirm termination")
-@click.pass_context
-def card_terminate(ctx, card_id, force):
-    """Terminate a virtual card (permanent - requires --force)."""
-    if not force:
-        raise click.UsageError("Termination requires --force flag for safety")
-    
-    config = ctx.obj["config"]
-    yolo = ctx.obj["yolo"]
-    
-    # Extra confirmation unless in yolo mode
-    if not yolo and not config.autonomous_enabled:
-        if not click.confirm(f"⚠️  Permanently terminate card {card_id}? This cannot be undone."):
-            click.echo("Cancelled.")
-            return
-    
-    api = KlutchAPI(config)
-    
-    mutation = gql("""
-        mutation TerminateVirtualCard($id: ID!) {
-            terminateVirtualCard(id: $id) {
-                id
-                status
-            }
-        }
-    """)
-    
-    try:
-        result = api.execute(mutation, {"id": card_id})
-        card_data = result.get("terminateVirtualCard", {})
-        
-        # Log to audit
-        log_audit("CARD_TERMINATED", {
-            "card_id": card_id,
-            "reason": "user_request"
-        })
-        
-        click.echo(f"✓ Terminated card: {card_data.get('id')} (Status: {card_data.get('status')})")
-    except click.ClickException:
-        raise
-    except Exception as e:
-        raise click.ClickException(f"Failed to terminate card: {e}")
+        data = _api_request(query, endpoint, token, cfg, variables)
+        click.echo(json.dumps(data, indent=2))
+    except ValueError as e:
+        raise click.ClickException(str(e))
 
 
 @cli.group()
-def config_cmd():
+def config() -> None:
     """Manage configuration."""
-    pass
 
 
-@config_cmd.command(name="get")
+@config.command("get")
 @click.argument("key", required=False)
-@click.pass_context
-def config_get(ctx, key):
-    """Get configuration value(s)."""
-    config = load_config()
+def config_get(key: Optional[str]) -> None:
+    """Get configuration value."""
+    cfg = _load_config()
+    if not key:
+        click.echo(json.dumps(cfg, indent=2, sort_keys=True))
+        return
     
-    if key:
-        # Handle nested keys like "autonomous.max_per_card"
-        parts = key.split(".")
-        value = asdict(config)
-        for part in parts:
-            if isinstance(value, dict) and part in value:
-                value = value[part]
-            else:
-                raise click.ClickException(f"Unknown config key: {key}")
-        click.echo(f"{key} = {value}")
-    else:
-        # Show all config
-        click.echo(json.dumps(asdict(config), indent=2))
+    keys = key.split(".")
+    value = cfg
+    for k in keys:
+        if isinstance(value, dict) and k in value:
+            value = value[k]
+        else:
+            raise click.ClickException(f"Unknown config key: {key}")
+    click.echo(json.dumps(value, indent=2))
 
 
-@config_cmd.command(name="set")
+@config.command("set")
 @click.argument("key")
 @click.argument("value")
-@click.pass_context
-def config_set(ctx, key, value):
+def config_set(key: str, value: str) -> None:
     """Set configuration value."""
-    config = load_config()
+    cfg = _load_config()
     
-    # Convert value types
-    if value.lower() in ("true", "false"):
-        value = value.lower() == "true"
-    elif "." in value:
-        try:
-            value = float(value)
-        except ValueError:
-            pass
+    if value.lower() == "true":
+        parsed_value = True
+    elif value.lower() == "false":
+        parsed_value = False
+    elif value.isdigit():
+        parsed_value = int(value)
     else:
         try:
-            value = int(value)
+            parsed_value = float(value)
         except ValueError:
-            pass
+            parsed_value = value
     
-    # Handle nested keys
-    parts = key.split(".")
-    if len(parts) == 1:
-        setattr(config, key, value)
-    elif parts[0] == "autonomous":
-        if parts[1] == "enabled":
-            config.autonomous_enabled = value
-        elif parts[1] == "max_per_card":
-            config.max_per_card = value
-        elif parts[1] == "max_daily_total":
-            config.max_daily_total = value
-        elif parts[1] == "require_approval_above":
-            config.require_approval_above = value
-        elif parts[1] == "allowed_merchants":
-            config.allowed_merchants = value.split(",") if isinstance(value, str) else value
-        elif parts[1] == "blocked_categories":
-            # Merge with hardcoded
-            user_cats = value.split(",") if isinstance(value, str) else value
-            config.blocked_categories = list(set(user_cats) | HARDCODED_BLOCKED_CATEGORIES)
-        else:
-            raise click.ClickException(f"Unknown config key: {key}")
-    elif parts[0] == "api":
-        if parts[1] == "base_url":
-            config.api_base_url = value
-        elif parts[1] == "timeout":
-            config.api_timeout = value
-        elif parts[1] == "max_retries":
-            config.api_max_retries = value
-        else:
-            raise click.ClickException(f"Unknown config key: {key}")
-    else:
-        raise click.ClickException(f"Unknown config key: {key}")
+    keys = key.split(".")
+    target = cfg
+    for k in keys[:-1]:
+        if k not in target:
+            target[k] = {}
+        target = target[k]
+    target[keys[-1]] = parsed_value
     
-    save_config(config)
-    click.echo(f"✓ Set {key} = {value}")
+    _save_config(cfg)
+    click.echo(f"Set {key} = {parsed_value}")
+
+
+def main() -> None:
+    cli()
 
 
 if __name__ == "__main__":
-    cli()
+    main()
