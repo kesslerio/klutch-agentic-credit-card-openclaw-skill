@@ -42,15 +42,12 @@ clawhub install klutch
 Set your Klutch API credentials:
 
 ```bash
+# Direct credentials
 export KLUTCH_CLIENT_ID="your-client-id"
 export KLUTCH_SECRET_KEY="your-secret-key"
-```
 
-Or use the alternative naming:
-
-```bash
-export KLUTCH_API_KEY="your-client-id"
-export KLUTCH_API_SECRET="your-secret-key"
+# OR 1Password CLI integration (item must have "api key" and "api secret" fields)
+export KLUTCH_1PASSWORD_ITEM="Klutch API Credential"
 ```
 
 ### Configuration File

@@ -5,12 +5,13 @@ metadata:
   openclaw:
     emoji: 💳
     requires:
-      env:
+      env: []
+      optional_env:
         - KLUTCH_CLIENT_ID
         - KLUTCH_SECRET_KEY
-      optional_env:
         - KLUTCH_API_KEY
         - KLUTCH_API_SECRET
+        - KLUTCH_1PASSWORD_ITEM
     install:
       - id: pip
         kind: pip
@@ -38,15 +39,12 @@ This skill provides a command-line interface for accessing Klutch credit card da
 Set your Klutch API credentials:
 
 ```bash
+# Option 1: Direct credentials
 export KLUTCH_CLIENT_ID="your-client-id"
 export KLUTCH_SECRET_KEY="your-secret-key"
-```
 
-Or use alternative naming:
-
-```bash
-export KLUTCH_API_KEY="your-client-id"
-export KLUTCH_API_SECRET="your-secret-key"
+# Option 2: 1Password CLI integration (requires 'op' CLI)
+export KLUTCH_1PASSWORD_ITEM="Klutch API Credential"
 ```
 
 ### Configuration File
