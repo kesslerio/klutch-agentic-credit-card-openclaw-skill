@@ -232,6 +232,174 @@ def card_categories(ctx: Context) -> None:
         raise click.ClickException(str(e))
 
 
+@card.command("create")
+@click.option("--name", "-n", required=True, help="Display name for the virtual card")
+@click.option("--limit", "-l", type=float, required=True, help="Spending limit in dollars")
+@click.option("--merchant", "-m", help="Lock card to specific merchant name")
+@click.option("--category", "-c", help="Restrict to transaction category")
+@click.option("--single-use", is_flag=True, help="Auto-terminate after first transaction")
+@click.option("--yolo", is_flag=True, hidden=True)
+@click.pass_obj
+def card_create(ctx: Context, name: str, limit: float, merchant: Optional[str], 
+                category: Optional[str], single_use: bool, yolo: bool) -> None:
+    """Create a new virtual card with spending controls."""
+    cfg = _load_config()
+    endpoint = cfg["api"]["endpoint"]
+    
+    # Safety checks
+    max_per_card = cfg.get("autonomous", {}).get("max_per_card", 200)
+    require_approval = cfg.get("autonomous", {}).get("require_approval_above", 100)
+    
+    if limit > max_per_card:
+        raise click.ClickException(
+            f"Limit ${limit:.2f} exceeds maximum allowed (${max_per_card:.2f}). "
+            f"Adjust 'autonomous.max_per_card' in config to increase."
+        )
+    
+    # Check if approval required (not in yolo mode)
+    if not yolo and not ctx.yolo and limit > require_approval:
+        if not click.confirm(f"Create card '{name}' with ${limit:.2f} limit?"):
+            click.echo("Cancelled.")
+            return
+    
+    try:
+        token = get_token(endpoint)
+        
+        # Build GraphQL mutation
+        query = """
+        mutation($input: VirtualCardInput!) {
+            createVirtualCard(input: $input) {
+                id
+                name
+                limit
+                status
+                cardNumber
+                expiryDate
+                cvv
+            }
+        }
+        """
+        
+        input_data = {
+            "name": name,
+            "limit": limit,
+        }
+        
+        if merchant:
+            input_data["merchantName"] = merchant
+        if category:
+            input_data["categoryId"] = category
+        if single_use:
+            input_data["singleUse"] = True
+        
+        variables = {"input": input_data}
+        
+        data = _api_request(query, endpoint, token, cfg, variables)
+        card_data = data.get("createVirtualCard", {})
+        
+        # Log creation
+        _log_action("CARD_CREATED", {
+            "card_id": card_data.get("id"),
+            "name": name,
+            "limit": limit,
+            "merchant": merchant,
+            "single_use": single_use
+        })
+        
+        # Display result (mask card number)
+        result = {
+            "id": card_data.get("id"),
+            "name": card_data.get("name"),
+            "limit": card_data.get("limit"),
+            "status": card_data.get("status"),
+            "card_number": _mask_card_number(card_data.get("cardNumber")),
+            "expiry": card_data.get("expiryDate"),
+            "cvv": "***" if card_data.get("cvv") else None,
+        }
+        
+        click.echo(json.dumps(result, indent=2))
+        
+        if card_data.get("cardNumber"):
+            click.echo("\n⚠️  Copy card details immediately - they won't be shown again!")
+        
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+
+@card.command("terminate")
+@click.argument("card_id")
+@click.option("--force", is_flag=True, required=True, 
+              help="Required flag to confirm permanent termination")
+@click.pass_obj
+def card_terminate(ctx: Context, card_id: str, force: bool) -> None:
+    """Permanently terminate a virtual card (cannot be undone)."""
+    if not force:
+        raise click.UsageError("Termination requires --force flag for safety")
+    
+    cfg = _load_config()
+    endpoint = cfg["api"]["endpoint"]
+    
+    # Confirm unless in yolo mode
+    if not ctx.yolo:
+        if not click.confirm(f"⚠️  Permanently terminate card {card_id}? This cannot be undone."):
+            click.echo("Cancelled.")
+            return
+    
+    try:
+        token = get_token(endpoint)
+        
+        query = """
+        mutation($id: ID!) {
+            terminateVirtualCard(id: $id) {
+                id
+                status
+            }
+        }
+        """
+        
+        variables = {"id": card_id}
+        data = _api_request(query, endpoint, token, cfg, variables)
+        card_data = data.get("terminateVirtualCard", {})
+        
+        # Log termination
+        _log_action("CARD_TERMINATED", {"card_id": card_id})
+        
+        click.echo(json.dumps({
+            "id": card_data.get("id"),
+            "status": card_data.get("status"),
+            "message": "Card terminated successfully"
+        }, indent=2))
+        
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+
+def _mask_card_number(card_number: Optional[str]) -> Optional[str]:
+    """Mask card number for display, showing only last 4 digits."""
+    if not card_number:
+        return None
+    if len(card_number) <= 4:
+        return "****"
+    return "****-****-****-" + card_number[-4:]
+
+
+def _log_action(action: str, details: dict) -> None:
+    """Log card operations to audit file."""
+    import os
+    from datetime import datetime
+    
+    audit_dir = Path.home() / ".local" / "share" / "klutch"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    audit_file = audit_dir / "audit.log"
+    
+    timestamp = datetime.now().isoformat()
+    details_str = ", ".join(f"{k}={v}" for k, v in details.items())
+    log_entry = f"[{timestamp}] {action}: {details_str}\n"
+    
+    with open(audit_file, "a") as f:
+        f.write(log_entry)
+
+
 @card.command("spending")
 @click.pass_obj
 def card_spending(ctx: Context) -> None:
