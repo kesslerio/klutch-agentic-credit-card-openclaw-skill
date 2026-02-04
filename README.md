@@ -6,7 +6,7 @@
 ## Features
 
 - **Virtual Card Creation**: Create merchant-locked, single-use virtual cards with spending limits
-- **Card Management**: List, view, and terminate virtual cards
+- **Card Management**: List and view virtual cards
 - **Transaction History**: List recent transactions with merchant details
 - **Spending Categories**: View transaction categories and MCC codes
 - **Spending Analysis**: Group transactions by category
@@ -125,15 +125,17 @@ python scripts/klutch.py card create --name "GitHub Pro" --limit 50.00 --merchan
 python scripts/klutch.py card create --name "AWS Services" --limit 200.00 --category "cloud"
 python scripts/klutch.py card create --name "One-time Purchase" --limit 47.50 --single-use
 
-# Terminate a virtual card (permanent)
-python scripts/klutch.py card terminate crd_xxx --force
-
 # View transaction categories
 python scripts/klutch.py card categories
 
 # View spending by category
 python scripts/klutch.py card spending
 ```
+
+**⚠️ API Limitations:**
+
+- **Card Details:** Klutch's API does not return sensitive card details (PAN/CVV/expiry). After creation, retrieve card details from the [Klutch Dashboard](https://dashboard.klutchcard.com/) or mobile app.
+- **Card Termination:** The API does not currently support card termination. To close a card, use the Klutch Dashboard or contact support.
 
 ### Configuration Management
 
