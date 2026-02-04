@@ -138,22 +138,33 @@ def save_card_to_1password(item_name: str, card_data: dict) -> bool:
         cvv = card_data.get("cvv", "")
         card_id = card_data.get("id", "")
         
+        # Normalize expiry date to YYYY/MM for 1Password
+        if expiry and "/" in expiry:
+            parts = expiry.split("/")
+            if len(parts) == 2:
+                # Handle MM/YY or MM/YYYY
+                month = parts[0].zfill(2)
+                year = parts[1]
+                if len(year) == 2:
+                    year = "20" + year
+                expiry = f"{year}/{month}"
+        
         # Build the item creation command
         cmd = [
             "op", "item", "create",
-            "--category", "credit-card",
+            "--category", "Credit Card",
             "--title", item_name,
         ]
         
         # Add card fields
         if card_number:
-            cmd.extend(["cardNumber=" + card_number])
+            cmd.extend(["ccnum=" + card_number])
         if expiry:
             cmd.extend(["expiry=" + expiry])
         if cvv:
             cmd.extend(["cvv=" + cvv])
         if card_id:
-            cmd.extend(["cardId=" + card_id])
+            cmd.extend(["cardId[text]=" + card_id])
         
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         return result.returncode == 0
