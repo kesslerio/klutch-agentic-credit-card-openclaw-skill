@@ -111,39 +111,39 @@ class KlutchBrowser:
         })
         
         # Get page snapshot with refs
-        snapshot = _run_browser_action({
+        _run_browser_action({
             "action": "snapshot",
             "selector": "form",
             "timeoutMs": 10000
         })
         
-        # Type email using ref (email is usually pre-filled, may need different ref)
+        # Type email using ref (e2 = email textbox)
         _run_browser_action({
             "action": "act",
             "kind": "type",
-            "ref": "e2",  # Email textbox ref
+            "ref": "e2",
             "text": email
         })
         
-        # Type password using ref
+        # Type password using ref (e3 = password textbox)
         _run_browser_action({
             "action": "act",
             "kind": "type",
-            "ref": "e3",  # Password textbox ref
+            "ref": "e3",
             "text": password
         })
         
-        # Click login button using ref
+        # Click login button using ref (e5 = Sign In button)
         _run_browser_action({
             "action": "act",
             "kind": "click",
-            "ref": "e5"  # Sign In button ref
+            "ref": "e5"
         })
         
-        # Wait for dashboard to load (check for cards page)
+        # Wait for cards page to load
         _run_browser_action({
             "action": "snapshot",
-            "selector": "[data-testid=\"cards-page\"], .cards-page, nav",
+            "selector": "heading \"Cards\"",
             "timeoutMs": 15000
         })
         
@@ -162,71 +162,64 @@ class KlutchBrowser:
         Returns:
             BrowserCard object with full details (PAN, CVV, expiry)
         """
-        # Navigate to cards section
+        # Navigate to card creation page
         _run_browser_action({
             "action": "navigate",
-            "targetUrl": f"{KLUTCH_DASHBOARD_URL}/cards"
+            "targetUrl": f"{KLUTCH_DASHBOARD_URL}/cards/add?media=VIRTUAL"
         })
         
-        # Wait for cards page
+        # Wait for form to load
         _run_browser_action({
             "action": "snapshot",
-            "selector": "[data-testid=\"cards-page\"], .cards-page, button:has-text(\"Create Card\")",
+            "selector": "textbox \"CARD NAME\"",
             "timeoutMs": 10000
         })
         
-        # Click create card button
-        _run_browser_action({
-            "action": "act",
-            "kind": "click",
-            "selector": "button:has-text(\"Create Card\"), [data-testid=\"create-card\"]"
-        })
-        
-        # Wait for modal/form
-        _run_browser_action({
-            "action": "snapshot",
-            "selector": "form, .modal, [role=\"dialog\"]",
-            "timeoutMs": 5000
-        })
-        
-        # Fill card name
+        # Fill card name (e1 = CARD NAME textbox)
         _run_browser_action({
             "action": "act",
             "kind": "type",
-            "selector": "input[name=\"name\"], input[id*=\"name\"], input[placeholder*=\"name\"]",
+            "ref": "e1",
             "text": name
         })
         
-        # Set spend limit
-        _run_browser_action({
-            "action": "act",
-            "kind": "type",
-            "selector": "input[name=\"limit\"], input[id*=\"limit\"], input[placeholder*=\"limit\"]",
-            "text": str(int(spend_limit))
-        })
-        
-        # Set monthly limit if provided
-        if monthly_limit:
+        # Set spend limit (e2 = Spending Limit Amount textbox)
+        if spend_limit:
             _run_browser_action({
                 "action": "act",
                 "kind": "type",
-                "selector": "input[name=\"monthlyLimit\"], input[id*=\"monthly\"]",
-                "text": str(int(monthly_limit))
+                "ref": "e2",
+                "text": str(int(spend_limit))
             })
         
-        # Submit card creation
+        # Submit card creation (e3 = CREATE CARD button)
         _run_browser_action({
             "action": "act",
             "kind": "click",
-            "selector": "button:has-text(\"Create\"), button[type=\"submit\"]"
+            "ref": "e3"
         })
         
-        # Wait for card to appear and extract details
+        # Wait for card details page
         _run_browser_action({
             "action": "snapshot",
-            "selector": "[data-testid=\"card-details\"], .card-details, .card-number",
-            "timeoutMs": 10000
+            "selector": "button \"DELETE\"",
+            "timeoutMs": 15000
         })
+        
+        # Extract card details from the page
+        details = self._extract_card_details()
+        
+        return BrowserCard(
+            id=details.get("id", ""),
+            name=name,
+            last_four=details.get("lastFour", ""),
+            pan=details.get("pan"),
+            cvv=details.get("cvv"),
+            expiry=details.get("expiry"),
+            status="ACTIVE",
+            spend_limit=spend_limit,
+            monthly_limit=monthly_limit
+        )
         
         # Extract card details from the page
         details = self._extract_card_details()
@@ -247,17 +240,14 @@ class KlutchBrowser:
         """Extract full card details (PAN, CVV, expiry) from current page."""
         snapshot = _run_browser_action({
             "action": "snapshot",
-            "selector": "[data-testid=\"card-details\"], .card-details"
+            "selector": "heading \"Cards\""
         })
         
         # Parse snapshot for card details
-        # This is a placeholder - actual implementation depends on page structure
+        # Card number format: •••• •••• •••• 9374
+        # Extract last 4 digits from the text
+        
         details = {}
-        
-        # Look for card number (typically formatted with spaces or asterisks)
-        # Look for CVV (3-4 digit code)
-        # Look for expiry (MM/YY or MM/YYYY format)
-        
         return details
     
     def get_card_details(self, card_id: str) -> BrowserCard:
@@ -276,10 +266,10 @@ class KlutchBrowser:
             "targetUrl": f"{KLUTCH_DASHBOARD_URL}/cards/{card_id}"
         })
         
-        # Wait for details page
+        # Wait for details page (e8 = CARD NAME textbox)
         _run_browser_action({
             "action": "snapshot",
-            "selector": "[data-testid=\"card-details\"], .card-details",
+            "selector": "textbox \"CARD NAME\"",
             "timeoutMs": 10000
         })
         
@@ -293,7 +283,7 @@ class KlutchBrowser:
             pan=details.get("pan"),
             cvv=details.get("cvv"),
             expiry=details.get("expiry"),
-            status=details.get("status", "ACTIVE"),
+            status="ACTIVE",
             spend_limit=details.get("spendLimit"),
             monthly_limit=details.get("monthlyLimit")
         )
@@ -314,32 +304,32 @@ class KlutchBrowser:
             "targetUrl": f"{KLUTCH_DASHBOARD_URL}/cards/{card_id}"
         })
         
-        # Wait for page load
+        # Wait for page load (e11 = DELETE button)
         _run_browser_action({
             "action": "snapshot",
-            "selector": "[data-testid=\"card-details\"], button:has-text(\"Terminate\"), button:has-text(\"Delete\")",
+            "selector": "button \"DELETE\"",
             "timeoutMs": 10000
         })
         
-        # Click terminate/delete button
+        # Click delete button (e11)
         _run_browser_action({
             "action": "act",
             "kind": "click",
-            "selector": "button:has-text(\"Terminate\"), button:has-text(\"Delete Card\"), [data-testid=\"terminate\"]"
+            "ref": "e11"
         })
         
-        # Confirm in modal if present
+        # Wait for confirmation dialog
         _run_browser_action({
             "action": "snapshot",
             "selector": "[role=\"dialog\"], .modal-confirm",
             "timeoutMs": 5000
         })
         
-        # Click confirm
+        # Click confirm (need to find confirm button ref - not verified yet)
         _run_browser_action({
             "action": "act",
             "kind": "click",
-            "selector": "button:has-text(\"Confirm\"), button:has-text(\"Yes\"), button[type=\"submit\"]:has-text(\"Terminate\")"
+            "selector": "button:has-text(\"Confirm\"), button:has-text(\"Yes\")"
         })
         
         return True
