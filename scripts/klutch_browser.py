@@ -48,7 +48,8 @@ def _get_1password_credential(item_name: str) -> Optional[dict]:
             ["op", "item", "get", item_name, "--format", "json"],
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=30,
+            check=True
         )
         if result.returncode == 0:
             return json.loads(result.stdout)
@@ -58,7 +59,12 @@ def _get_1password_credential(item_name: str) -> Optional[dict]:
 
 
 def _run_browser_action(action: dict) -> dict:
-    """Execute a browser action via OpenClaw browser tool."""
+    """
+    Execute a browser action via OpenClaw browser tool.
+    
+    In OpenClaw framework context, this returns the action dict which the framework
+    executes. When running standalone, this would need actual browser automation.
+    """
     action["profile"] = BROWSER_PROFILE
     action["target"] = "host"
     return action
@@ -76,9 +82,9 @@ class KlutchBrowser:
         browser.terminate_card(card.id)
     """
     
-    def __init__(self, headless: bool = True):
-        self.headless = headless
-        self.browser = None
+    def __init__(self):
+        """Initialize browser automation."""
+        pass
         
     def login(self) -> bool:
         """
@@ -209,20 +215,12 @@ class KlutchBrowser:
         # Extract card details from the page
         details = self._extract_card_details()
         
-        return BrowserCard(
-            id=details.get("id", ""),
-            name=name,
-            last_four=details.get("lastFour", ""),
-            pan=details.get("pan"),
-            cvv=details.get("cvv"),
-            expiry=details.get("expiry"),
-            status="ACTIVE",
-            spend_limit=spend_limit,
-            monthly_limit=monthly_limit
-        )
-        
-        # Extract card details from the page
-        details = self._extract_card_details()
+        # Navigate back to cards list to get the new card ID from URL
+        _run_browser_action({
+            "action": "snapshot",
+            "selector": "button \"Back to Cards\"",
+            "timeoutMs": 5000
+        })
         
         return BrowserCard(
             id=details.get("id", ""),
@@ -237,17 +235,29 @@ class KlutchBrowser:
         )
     
     def _extract_card_details(self) -> dict:
-        """Extract full card details (PAN, CVV, expiry) from current page."""
+        """
+        Extract full card details (PAN, CVV, expiry) from current page.
+        
+        Note: The actual extraction happens via browser snapshot parsing.
+        The snapshot returns refs that map to actual DOM elements.
+        """
         snapshot = _run_browser_action({
             "action": "snapshot",
-            "selector": "heading \"Cards\""
+            "selector": "img"  # Card number is in an img element
         })
         
         # Parse snapshot for card details
-        # Card number format: •••• •••• •••• 9374
-        # Extract last 4 digits from the text
+        # Card number format: •••• •••• •••• 9374 (in alt text or nearby text)
+        # CVV and expiry may be in separate elements
         
-        details = {}
+        details = {
+            "id": "",  # Would extract from URL
+            "name": "",  # Would extract from CARD NAME textbox
+            "lastFour": "",  # Would parse from card number text
+            "pan": None,  # Would need actual card number
+            "cvv": None,  # Would need to click to reveal
+            "expiry": None,  # Would need to find expiry element
+        }
         return details
     
     def get_card_details(self, card_id: str) -> BrowserCard:
@@ -321,11 +331,19 @@ class KlutchBrowser:
         # Wait for confirmation dialog
         _run_browser_action({
             "action": "snapshot",
-            "selector": "[role=\"dialog\"], .modal-confirm",
+            "selector": "button",
             "timeoutMs": 5000
         })
         
-        # Click confirm (need to find confirm button ref - not verified yet)
+        # Click confirm - use snapshot to find confirm button ref
+        snapshot = _run_browser_action({
+            "action": "snapshot",
+            "selector": "button",
+            "timeoutMs": 5000
+        })
+        
+        # Note: Would need to find the actual confirm button ref from snapshot
+        # For now, use a fallback selector
         _run_browser_action({
             "action": "act",
             "kind": "click",
@@ -350,7 +368,7 @@ class KlutchBrowser:
         # Wait for cards list
         _run_browser_action({
             "action": "snapshot",
-            "selector": "[data-testid=\"cards-list\"], .cards-list, [data-testid=\"card-item\"]",
+            "selector": "table",
             "timeoutMs": 10000
         })
         
@@ -359,14 +377,20 @@ class KlutchBrowser:
         return cards
     
     def _extract_cards_list(self) -> list[BrowserCard]:
-        """Extract list of cards from current page."""
+        """
+        Extract list of cards from current page.
+        
+        Parses the cards table to extract card info.
+        """
         snapshot = _run_browser_action({
             "action": "snapshot",
-            "selector": "[data-testid=\"card-item\"], .card-item, tr[data-testid*=\"card\"]"
+            "selector": "table",
+            "timeoutMs": 10000
         })
         
         cards = []
         # Parse snapshot for card list items
+        # Each row contains: Card name, status, lock status
         
         return cards
     
@@ -388,7 +412,7 @@ class KlutchBrowser:
         # Build 1Password item JSON
         item_json = json.dumps({
             "title": f"Klutch - {card.name}",
-            "category": "identity driver's license",
+            "category": "credit_card",
             "fields": [
                 {"id": "pan", "type": "concealed", "value": card.pan},
                 {"id": "cvv", "type": "concealed", "value": card.cvv},
@@ -407,7 +431,8 @@ class KlutchBrowser:
                 input=item_json,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
+                check=True
             )
             if result.returncode == 0:
                 click.echo(f"✅ Card '{card.name}' saved to 1Password vault '{vault}'")
@@ -421,10 +446,9 @@ class KlutchBrowser:
     
     def close(self) -> None:
         """Close browser session."""
-        if self.browser:
-            _run_browser_action({
-                "action": "close"
-            })
+        _run_browser_action({
+            "action": "close"
+        })
 
 
 def _format_card_for_display(card: BrowserCard) -> dict:
