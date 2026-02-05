@@ -1,9 +1,17 @@
-# Klutch Dashboard - Browser Selectors
+# Klutch Dashboard - Browser Selectors Reference
 
-This document contains verified UI selectors for browser automation of the Klutch Dashboard.
+**Purpose:** UI element references for OpenClaw framework automation of Klutch Dashboard.
+
+**Important:** These selectors are for the OpenClaw framework's browser tool. They define the interaction contract between `klutch_browser.py` and the browser automation.
 
 **Verified:** 2026-02-04  
 **URL:** `https://app.klutch.cards`
+
+---
+
+## Framework Usage
+
+The framework interprets these selectors and converts them to actual browser actions:
 
 ---
 

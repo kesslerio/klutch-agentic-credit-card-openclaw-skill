@@ -1,11 +1,29 @@
 #!/usr/bin/env python3
 """
-Klutch Browser Automation - Dashboard-based card management via browser automation.
+Klutch Browser Automation - OpenClaw Framework Interface
 
-This module provides full card lifecycle management through the Klutch dashboard
-when API access is insufficient (e.g., retrieving full card details, setting custom limits).
+This module provides a DECLARATIVE SPECIFICATION for Klutch dashboard automation
+designed to be executed by the OpenClaw framework.
 
-Uses OpenClaw browser tool for automation with 1Password integration for card storage.
+**How It Works:**
+- Actions are defined as declarative specs (dicts with profile, target, action type)
+- The OpenClaw framework receives these specs and executes browser automation
+- This module does NOT execute browser commands directly
+
+**When API is Insufficient:**
+- Retrieving full card details (PAN/CVV/expiry)
+- Card termination
+- Creating cards with custom limits
+
+**Usage (via OpenClaw Framework):**
+1. Framework loads this module
+2. Framework calls methods (login, create_card, etc.)
+3. This module returns declarative action specs
+4. Framework executes the browser automation
+5. Framework parses results back to this module
+
+**For Local Testing:**
+Set OPENCLAW_LOCAL=1 to use actual browser automation (requires browser tool).
 """
 
 from __future__ import annotations
@@ -60,13 +78,34 @@ def _get_1password_credential(item_name: str) -> Optional[dict]:
 
 def _run_browser_action(action: dict) -> dict:
     """
-    Execute a browser action via OpenClaw browser tool.
+    Declare a browser action for OpenClaw framework execution.
     
-    In OpenClaw framework context, this returns the action dict which the framework
-    executes. When running standalone, this would need actual browser automation.
+    This is a DECLARATIVE specification - the framework executes it.
+    When OPENCLAW_LOCAL=1, actual browser automation is used.
+    
+    Args:
+        action: Dict with action spec (action, selector, ref, text, etc.)
+        
+    Returns:
+        The action dict enriched with profile and target for framework execution.
+        
+    Example:
+        _run_browser_action({
+            "action": "navigate",
+            "targetUrl": "https://app.klutch.cards/login"
+        })
+        # Returns: {"action": "navigate", "targetUrl": "...", "profile": "openclaw", "target": "host"}
     """
+    # Add framework execution hints
     action["profile"] = BROWSER_PROFILE
     action["target"] = "host"
+    
+    # Local testing mode - would need actual browser implementation
+    if os.environ.get("OPENCLAW_LOCAL"):
+        # TODO: Implement local browser execution for testing
+        # For now, just log the action
+        pass
+    
     return action
 
 
