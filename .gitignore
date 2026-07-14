@@ -60,3 +60,6 @@ config/klutch.json
 # Logs
 *.log
 logs/
+
+.ai/
+.worktrees/
